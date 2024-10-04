@@ -24,6 +24,8 @@ Date: 2024, March.
 #include "driver/i2c.h"
 #include "lcd_jr.h"
 #include <string.h>
+#include "mqtt/mqtt.h"
+#include "wifi/wifi.h"
 
 //==================================================================================================================================================================
 //--- Variaveis Globais ---
@@ -44,6 +46,9 @@ const char *MPUValues[2];
 QueueHandle_t Queueintr;	// Cria a fila como variavel global
 SemaphoreHandle_t MutexMenu;
 SemaphoreHandle_t MutexLora;
+xSemaphoreHandle wifiConnection;
+xSemaphoreHandle mqttConnection;
+
 
 //==================================================================================================================================================================
 //--- Variaveis Controle Push Button ---
@@ -58,6 +63,9 @@ SemaphoreHandle_t MutexLora;
 #define FREQUENCY 915e6
 #define BW 125e3
 static const char *TAG2 = "LoRa";
+
+//==================================================================================================================================================================
+static const char *TAG4 = "MQTT";
 
 //==================================================================================================================================================================
 //--- Structs ---
@@ -86,7 +94,8 @@ void MenuDisp(void *p);				 // Configura o menu do LCD mostrando suas opções
 void DataExcel(void *p);			 // Envia dados para excel
 void ReadButton(void *p);			 // Realiza a leitura dos botões
 void ReceiveLoraData(void *p); // Recebe parametros LoRa.
-
+void wifi_treat(void *p);
+void mqtt_treat(void *p);
 //==================================================================================================================================================================
 //--- Functions prototipos ---
 esp_err_t setupLoRa(void);
@@ -118,13 +127,39 @@ void app_main(void)
 
   ESP_ERROR_CHECK(setupLoRa());                             // Inicializa LoRa.
 
+  // Initialize NETIF
+  ESP_ERROR_CHECK(esp_netif_init());
+  ESP_ERROR_CHECK(esp_event_loop_create_default());
+  esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+  assert(sta_netif);
+
+  // Initialize NVS
+  esp_err_t ret = nvs_flash_init();
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == 
+                                                ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    ret = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK( ret );
+
+  wifiConnection = xSemaphoreCreateBinary();
+  mqttConnection = xSemaphoreCreateBinary();
+
 	Queueintr = xQueueCreate(10,sizeof(int));							    // Cria a fila e passa seu tamanho junto com o tipo de dados
   MutexMenu = xSemaphoreCreateMutex();
   MutexLora = xSemaphoreCreateMutex();
 	xTaskCreate(ReadButton,"ReadButton",configMINIMAL_STACK_SIZE + 2000,NULL,3,NULL);		            // Cria uma task para Ler o botão com prioridade alta
 	xTaskCreate(MenuDisp,"menuDisp",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,3,NULL);				    // Cria uma task para Manipular o menu e mostrar as informacoes no LCD
 	xTaskCreate(DataExcel,"DataExcel",configMINIMAL_STACK_SIZE+2000,(void*)&vars,2,NULL);		        // Cria uma task para receber os dados via LoRa
-  xTaskCreatePinnedToCore(ReceiveLoraData,"ReceiveLoraData",configMINIMAL_STACK_SIZE+2000,(void*)&vars,4,NULL,1);
+  xTaskCreatePinnedToCore(ReceiveLoraData,"ReceiveLoraData",
+                                                  configMINIMAL_STACK_SIZE+2000,
+                                                         (void*)&vars,4,NULL,1);
+  xTaskCreatePinnedToCore(wifi_treat, "Tratamento Wifi", 
+                                                configMINIMAL_STACK_SIZE + 2000, 
+                                                              NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(mqtt_treat, "Tratamento Mqtt", 
+                                                configMINIMAL_STACK_SIZE + 2000, 
+                                                      (void*)&vars, 4, NULL, 1);
 
 	gpio_install_isr_service(0);										          // Config. das interrupcoes p/ adicionar pinos individualmente.
 	gpio_isr_handler_add(ButtonEnter, DataButton,(void *)ButtonEnter);	
@@ -146,6 +181,8 @@ void app_main(void)
   disp_WriteCmd(LCD_2POS);
   disp_Putrs(" ");
   disp_Putrs(Menu[( cont+1 )< 6 ? (cont+1) : 0 ]);
+
+  wifi_connect();
 
   while(true)
   {
@@ -550,6 +587,38 @@ void ReceiveLoraData(void *p)
     //ESP_LOGI(TAG2,"Espaço mínimo livre na stack: %u\n\n", uxHighWaterMark);
   }//end while
 }//end ReceiveLoraData
+
+//==================================================================================================================================================================
+//--- Treat_Wifi_Mqtt ---
+void wifi_treat(void *pvParameters)
+{
+    while(true)
+    {
+        if(xSemaphoreTake(wifiConnection, portMAX_DELAY))
+        {
+            mqtt_start();
+        }
+    }
+}
+
+void mqtt_treat(void *pvParameters)
+{
+    variable *variables = (variable*)pvParameters;
+    char msg[500];
+    if(xSemaphoreTake(mqttConnection, portMAX_DELAY))
+    {
+        while(true)
+        {
+            sprintf(msg, "{\n  \"data\":\n  {\n    \"Test\": %f,\n    \"gpstrack\": \"%s,%s\"\n  }\n}", variables->temp, variables->lat, variables->lon);
+            mqtt_publish_msg("wnology//state", msg);
+            printf(msg);
+            vTaskDelay(pdMS_TO_TICKS(3000));
+
+            UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
+            ESP_LOGI(TAG4,"Espaço mínimo livre na stack: %u\n",uxHighWaterMark);
+        }
+    }
+}//end Treat_Wifi_Mqtt
 
 //==================================================================================================================================================================
 //--- End of Program --
