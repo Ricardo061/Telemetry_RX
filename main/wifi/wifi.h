@@ -8,10 +8,10 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 
-#define SSID "Tomatinho"
+#define SSID "RedmiMa"
 #define PASSWORD "naoseiasenha" 
 
-extern xSemaphoreHandle wifiConnection;
+extern SemaphoreHandle_t wifiConnection;
     
 void wifi_connect(void)
 {

@@ -12,7 +12,6 @@ Date: 2024, March.
 
 //==================================================================================================================================================================
 //--- Bibliotecas ---
-
 #include <stdio.h>
 #include <stdbool.h>
 #include "driver/gpio.h"
@@ -21,7 +20,6 @@ Date: 2024, March.
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "freertos/semphr.h"
-#include "driver/i2c.h"
 #include "lcd_jr.h"
 #include <string.h>
 #include "mqtt/mqtt.h"
@@ -49,7 +47,6 @@ SemaphoreHandle_t MutexLora;
 xSemaphoreHandle wifiConnection;
 xSemaphoreHandle mqttConnection;
 
-
 //==================================================================================================================================================================
 //--- Variaveis Controle Push Button ---
 #define ButtonEnter 23
@@ -61,7 +58,7 @@ xSemaphoreHandle mqttConnection;
 //--- Variaveis LoRa ---
 #define BUFFER 2024
 #define FREQUENCY 915e6
-#define BW 125e3
+#define BW 250e3
 static const char *TAG2 = "LoRa";
 
 //==================================================================================================================================================================
@@ -74,9 +71,9 @@ typedef struct{
     float temp;
     float anglePitchDeg;
     float angleRollDeg;
-    char lat[30];
+    float lat;
     char lat_dir[1];
-    char lon[30];
+    float lon;
     char lon_dir[1];
     float altitude;
     float speed;
@@ -94,7 +91,7 @@ void MenuDisp(void *p);				 // Configura o menu do LCD mostrando suas opções
 void DataExcel(void *p);			 // Envia dados para excel
 void ReadButton(void *p);			 // Realiza a leitura dos botões
 void ReceiveLoraData(void *p); // Recebe parametros LoRa.
-void wifi_treat(void *p);
+void wifi_treat(void);
 void mqtt_treat(void *p);
 //==================================================================================================================================================================
 //--- Functions prototipos ---
@@ -148,18 +145,21 @@ void app_main(void)
 	Queueintr = xQueueCreate(10,sizeof(int));							    // Cria a fila e passa seu tamanho junto com o tipo de dados
   MutexMenu = xSemaphoreCreateMutex();
   MutexLora = xSemaphoreCreateMutex();
-	xTaskCreate(ReadButton,"ReadButton",configMINIMAL_STACK_SIZE + 2000,NULL,3,NULL);		            // Cria uma task para Ler o botão com prioridade alta
-	xTaskCreate(MenuDisp,"menuDisp",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,3,NULL);				    // Cria uma task para Manipular o menu e mostrar as informacoes no LCD
-	xTaskCreate(DataExcel,"DataExcel",configMINIMAL_STACK_SIZE+2000,(void*)&vars,2,NULL);		        // Cria uma task para receber os dados via LoRa
+
+  wifi_connect();
+
+	xTaskCreatePinnedToCore(ReadButton,"ReadButton",configMINIMAL_STACK_SIZE + 1000,NULL,3,NULL,0);		            // Cria uma task para Ler o botão com prioridade alta
+	xTaskCreatePinnedToCore(MenuDisp,"menuDisp",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,3,NULL,0);				    // Cria uma task para Manipular o menu e mostrar as informacoes no LCD
+	xTaskCreate(DataExcel,"DataExcel",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,2,NULL);		        // Cria uma task para receber os dados via LoRa
   xTaskCreatePinnedToCore(ReceiveLoraData,"ReceiveLoraData",
-                                                  configMINIMAL_STACK_SIZE+2000,
+                                                  configMINIMAL_STACK_SIZE+2500,
                                                          (void*)&vars,4,NULL,1);
-  xTaskCreatePinnedToCore(wifi_treat, "Tratamento Wifi", 
+  xTaskCreatePinnedToCore((void *)wifi_treat, "Tratamento Wifi", 
                                                 configMINIMAL_STACK_SIZE + 2000, 
-                                                              NULL, 5, NULL, 1);
+                                                              NULL, 3, NULL, 0);
   xTaskCreatePinnedToCore(mqtt_treat, "Tratamento Mqtt", 
                                                 configMINIMAL_STACK_SIZE + 2000, 
-                                                      (void*)&vars, 4, NULL, 1);
+                                                      (void*)&vars, 2, NULL, 0);
 
 	gpio_install_isr_service(0);										          // Config. das interrupcoes p/ adicionar pinos individualmente.
 	gpio_isr_handler_add(ButtonEnter, DataButton,(void *)ButtonEnter);	
@@ -181,8 +181,6 @@ void app_main(void)
   disp_WriteCmd(LCD_2POS);
   disp_Putrs(" ");
   disp_Putrs(Menu[( cont+1 )< 6 ? (cont+1) : 0 ]);
-
-  wifi_connect();
 
   while(true)
   {
@@ -423,8 +421,8 @@ void MenuDisp(void *p)
         __Delay(250);
         EnterPressed = false;
       }//end else if
-      __Delay(10);
       xSemaphoreGive(MutexMenu);
+      __Delay(10);
     }//end if
 	}//end while
 }//end MenuDisp
@@ -446,11 +444,11 @@ void DataExcel(void *p)
       printf(",");
       printf("%lu",PacketExcel->pressure_bmp);
       printf(",");
-      printf("%s",PacketExcel->lat);
+      printf("%.6f",PacketExcel->lat);
       printf(",");
       printf("%.1s",PacketExcel->lat_dir);
       printf(",");
-      printf("%.11s",PacketExcel->lon);
+      printf("%.6f",PacketExcel->lon);
       printf(",");
       printf("%.1s",PacketExcel->lon_dir);
       printf(",");
@@ -462,8 +460,9 @@ void DataExcel(void *p)
       
     }//end if
     xSemaphoreGive(MutexLora);
-		__Delay(1000);
+		__Delay(2000);
 	}//end while
+
 }//end Data Excel
 
 //==================================================================================================================================================================
@@ -501,38 +500,38 @@ void ReceiveLoraData(void *p)
     lora_receive();
     while(lora_received())
     {
+      vPacket->SNR = lora_packet_snr();
       vPacket->RSSI = lora_packet_rssi();
       strcpy((char *)vPacket->packetLoRa, "");
       lora_receive_packet(vPacket->packetLoRa,sizeof(vPacket->packetLoRa));
       printf("%s\n",(char *)vPacket->packetLoRa);
       char *index1  = strchr((char *)vPacket->packetLoRa,'!');
-       //if(index1) printf("Index1 encontrado\n");
+      //if(index1) printf("Index1 encontrado\n");
       char *index2  = strchr((char *)vPacket->packetLoRa,'@');
-        //if(index2) printf("Index2 encontrado\n");
+      //if(index2) printf("Index2 encontrado\n");
       char *index3  = strchr((char *)vPacket->packetLoRa,'#');
-        //if(index3) printf("Index3 encontrado\n");
+      //if(index3) printf("Index3 encontrado\n");
       char *index4  = strchr((char *)vPacket->packetLoRa,'C');
-        //if(index4) printf("Index4 encontrado\n");
+      //if(index4) printf("Index4 encontrado\n");
       char *index5  = strchr((char *)vPacket->packetLoRa,'A');
-        //if(index5) printf("Index5 encontrado\n");
+      //if(index5) printf("Index5 encontrado\n");
       char *index6  = strchr((char *)vPacket->packetLoRa,'&');
-        //if(index6) printf("Index6 encontrado\n");
+      //if(index6) printf("Index6 encontrado\n");
       char *index7  = strchr((char *)vPacket->packetLoRa,'*');
-        //if(index7) printf("Index7 encontrado\n");
+      //if(index7) printf("Index7 encontrado\n");
       char *index8  = strchr((char *)vPacket->packetLoRa,'(');
-        //if(index8) printf("Index8 encontrado\n");
+      //if(index8) printf("Index8 encontrado\n");
       char *index9  = strchr((char *)vPacket->packetLoRa,')');
-        //if(index9) printf("Index9 encontrado\n");
+      //if(index9) printf("Index9 encontrado\n");
       char *index10 = strchr((char *)vPacket->packetLoRa,'B');
-      char *index11 = strchr((char *)vPacket->packetLoRa,'E');
-        //if(index10) printf("Index10 encontrado\n");
+      //if(index10) printf("Index10 encontrado\n");
         //if(index11) printf("Index11 encontrado\n");
       
       if (index1!=NULL && index2!=NULL && index3!=NULL && index4!=NULL && index5!=NULL && index6!=NULL
-           && index7!=NULL && index8!=NULL && index9!=NULL && index10!=NULL && index11!=NULL) 
+           && index7!=NULL && index8!=NULL && index9!=NULL && index10!=NULL) 
       {
         //printf("Os index foram encontrados!\n");
-        char tempBuffer[20];
+        char tempBuffer[50];
 
         // Ângulo Pitch
         strncpy(tempBuffer, (char *)vPacket->packetLoRa, index1 - (char *)vPacket->packetLoRa);
@@ -553,14 +552,16 @@ void ReceiveLoraData(void *p)
         tempBuffer[index4 - index3 - 1] = '\0';
         vPacket->pressure_bmp = strtoul(tempBuffer, NULL, 10);
 
-        strncpy(vPacket->lat, index4 + 1, index5 - index4 - 1);
-        vPacket->lat[index5 - index4 - 1] = '\0';
+        strncpy(tempBuffer, index4 + 1, index5 - index4 - 1);
+        tempBuffer[index5 - index4 - 1] = '\0';
+        vPacket->lat = atof(tempBuffer);
 
         strncpy(vPacket->lat_dir, index5 + 1, index6 - index5 - 1);
         vPacket->lat_dir[index6 - index5 - 1] = '\0';
 
-        strncpy(vPacket->lon, index6 + 1, index7 - index6 - 1);
-        vPacket->lon[index7 - index6 - 1] = '\0';
+        strncpy(tempBuffer, index6 + 1, index7 - index6 - 1);
+        tempBuffer[index7 - index6 - 1] = '\0';
+        vPacket->lon = atof(tempBuffer);
 
         strncpy(vPacket->lon_dir, index7 + 1, index8 - index7 - 1);
         vPacket->lon_dir[index8 - index7 - 1] = '\0';
@@ -574,48 +575,47 @@ void ReceiveLoraData(void *p)
         strncpy(tempBuffer, index9 + 1, index10 - index9 - 1);
         tempBuffer[index10 - index9 - 1] = '\0';
         vPacket->speed = atof(tempBuffer);  // Converte para float
-
-        strncpy(tempBuffer, index10 + 1, index11 - index10 - 1);
-        tempBuffer[index11 - index10 - 1] = '\0';
-        vPacket->SNR = (uint8_t)strtoul(tempBuffer, NULL, 10);
         
       }//end if 
       lora_receive();
+      __Delay(2000);
     }//end while aninhado
-    __Delay(500);
-    //UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL); // obtenção de espaço livre na task em words
-    //ESP_LOGI(TAG2,"Espaço mínimo livre na stack: %u\n\n", uxHighWaterMark);
   }//end while
 }//end ReceiveLoraData
 
 //==================================================================================================================================================================
 //--- Treat_Wifi_Mqtt ---
-void wifi_treat(void *pvParameters)
+void wifi_treat(void)
 {
     while(true)
     {
         if(xSemaphoreTake(wifiConnection, portMAX_DELAY))
         {
-            mqtt_start();
+          mqtt_start();
         }
+        else{
+          wifi_connect();
+        }
+        __Delay(50);
     }
 }
 
 void mqtt_treat(void *pvParameters)
 {
     variable *variables = (variable*)pvParameters;
-    char msg[500];
+    char msg[200];
     if(xSemaphoreTake(mqttConnection, portMAX_DELAY))
     {
         while(true)
         {
-            sprintf(msg, "{\n  \"data\":\n  {\n    \"Test\": %f,\n    \"gpstrack\": \"%s,%s\"\n  }\n}", variables->temp, variables->lat, variables->lon);
-            mqtt_publish_msg("wnology//state", msg);
+            sprintf(msg, "{\n  \"data\":\n  {\n    \"Temperatura\": %f,\n    \"gpstrack\": \"%.6f,%.6f\"\n  }\n}", variables->temp, variables->lat, variables->lon);
+            mqtt_publish_msg("wnology/67005b8d6357fd1387ea3dc2/state", msg);
             printf(msg);
-            vTaskDelay(pdMS_TO_TICKS(3000));
 
             UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
             ESP_LOGI(TAG4,"Espaço mínimo livre na stack: %u\n",uxHighWaterMark);
+
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
     }
 }//end Treat_Wifi_Mqtt

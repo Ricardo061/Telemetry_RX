@@ -46,14 +46,10 @@ esp_err_t I2C0_Init(void)
     .scl_io_num = I2C0_SCL,
     .sda_pullup_en = GPIO_PULLUP_ENABLE,
     .scl_pullup_en = GPIO_PULLUP_ENABLE,
-    .master.clk_speed = 60000
+    .master.clk_speed = 60000,
   };
   i2c_param_config(I2C_NUM_0,&i2cConfig);
-  i2c_driver_install(I2C_NUM_0,I2C_MODE_MASTER,0,0,0); 
-
-  ESP_LOGI(TAG1,"I2C OK!");
-
-  return ESP_OK;
+  return i2c_driver_install(I2C_NUM_0,I2C_MODE_MASTER,0,0,0); 
   
 }//end I2C0_Init
 
