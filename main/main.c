@@ -504,7 +504,7 @@ void ReceiveLoraData(void *p)
       vPacket->RSSI = lora_packet_rssi();
       strcpy((char *)vPacket->packetLoRa, "");
       lora_receive_packet(vPacket->packetLoRa,sizeof(vPacket->packetLoRa));
-      printf("%s\n",(char *)vPacket->packetLoRa);
+      //printf("%s\n",(char *)vPacket->packetLoRa);
       char *index1  = strchr((char *)vPacket->packetLoRa,'!');
       //if(index1) printf("Index1 encontrado\n");
       char *index2  = strchr((char *)vPacket->packetLoRa,'@');
@@ -593,9 +593,6 @@ void wifi_treat(void)
         {
           mqtt_start();
         }
-        else{
-          wifi_connect();
-        }
         __Delay(50);
     }
 }
@@ -608,9 +605,9 @@ void mqtt_treat(void *pvParameters)
     {
         while(true)
         {
-            sprintf(msg, "{\n  \"data\":\n  {\n    \"Temperatura\": %f,\n    \"gpstrack\": \"%.6f,%.6f\"\n  }\n}", variables->temp, variables->lat, variables->lon);
+            sprintf(msg, "{\n  \"data\":\n  {\n    \"Temperatura\": %f,\n    \"gpstrack\": \"%.6f,%.6f\",\n    \"Pitch\": %.1f,\n    \"Roll\": %.1f,\n    \"Altitude\": %.2f,\n    \"Speed\": %.3f,\n    \"SNR\": %d,\n    \"RSSI\": %d\n    }\n}", variables->temp, variables->lat, variables->lon, variables->anglePitchDeg, variables->angleRollDeg, variables->altitude, variables->speed, variables->SNR, variables->RSSI);
             mqtt_publish_msg("wnology/67005b8d6357fd1387ea3dc2/state", msg);
-            printf(msg);
+            //printf(msg);
 
             UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
             ESP_LOGI(TAG4,"Espaço mínimo livre na stack: %u\n",uxHighWaterMark);
