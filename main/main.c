@@ -88,7 +88,6 @@ variable vars;
 //==================================================================================================================================================================
 //--- Tasks prototipos ---
 void MenuDisp(void *p);				 // Configura o menu do LCD mostrando suas opções
-void DataExcel(void *p);			 // Envia dados para excel
 void ReadButton(void *p);			 // Realiza a leitura dos botões
 void ReceiveLoraData(void *p); // Recebe parametros LoRa.
 void wifi_treat(void);
@@ -150,7 +149,6 @@ void app_main(void)
 
 	xTaskCreatePinnedToCore(ReadButton,"ReadButton",configMINIMAL_STACK_SIZE + 1000,NULL,3,NULL,0);		            // Cria uma task para Ler o botão com prioridade alta
 	xTaskCreatePinnedToCore(MenuDisp,"menuDisp",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,3,NULL,0);				    // Cria uma task para Manipular o menu e mostrar as informacoes no LCD
-	xTaskCreate(DataExcel,"DataExcel",configMINIMAL_STACK_SIZE + 2000,(void*)&vars,2,NULL);		        // Cria uma task para receber os dados via LoRa
   xTaskCreatePinnedToCore(ReceiveLoraData,"ReceiveLoraData",
                                                   configMINIMAL_STACK_SIZE+2500,
                                                          (void*)&vars,4,NULL,1);
@@ -426,44 +424,6 @@ void MenuDisp(void *p)
     }//end if
 	}//end while
 }//end MenuDisp
-
-//==================================================================================================================================================================
-//--- DataExcel ---
-void DataExcel(void *p)
-{
-  variable *PacketExcel=(variable*)p;
-	while(true)
-	{
-    if(xSemaphoreTake(MutexLora,2000/portTICK_PERIOD_MS))
-    {
-      printf("%.1f",PacketExcel->anglePitchDeg);
-      printf(",");
-      printf("%.1f",PacketExcel->angleRollDeg);
-      printf(",");
-      printf("%.2f",PacketExcel->temp);
-      printf(",");
-      printf("%lu",PacketExcel->pressure_bmp);
-      printf(",");
-      printf("%.6f",PacketExcel->lat);
-      printf(",");
-      printf("%.1s",PacketExcel->lat_dir);
-      printf(",");
-      printf("%.6f",PacketExcel->lon);
-      printf(",");
-      printf("%.1s",PacketExcel->lon_dir);
-      printf(",");
-      printf("%.2f",PacketExcel->altitude);
-      printf(",");
-      printf("%.3f",PacketExcel->speed);
-      printf(",");
-      printf("%u",PacketExcel->SNR);
-      
-    }//end if
-    xSemaphoreGive(MutexLora);
-		__Delay(2000);
-	}//end while
-
-}//end Data Excel
 
 //==================================================================================================================================================================
 //--- setupLoRa ---
